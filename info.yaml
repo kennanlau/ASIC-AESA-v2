@@ -7,11 +7,11 @@ project:
   language: "Verilog"
   clock_hz: 50000000
   tiles: "1x2"
-  top_module: "tt_um_aesa_brain"
+  top_module: "tt_um_kennanlau_aesa_brain_v2"
   source_files:
     - "spi_master.v"
     - "aesa_brain.v"
-    - "tt_um_aesa_brain.v"
+    - "tt_um_kennanlau_aesa_brain_v2.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).

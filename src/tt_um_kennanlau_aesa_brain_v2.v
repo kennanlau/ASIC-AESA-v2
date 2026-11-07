@@ -5,7 +5,7 @@
 //  uo[0] SCLK  uo[1] SDIO/MOSI  uo[2] CSB  uo[3] done (sticky)  uo[4] busy
 //  uo[5] RX_LOAD  uo[6] TX_LOAD
 //  uio[7:0] data in; when ui[7]=1 they drive out the last read byte
-module tt_um_aesa_brain (
+module tt_um_kennanlau_aesa_brain_v2 (
     input  wire [7:0] ui_in,
     output wire [7:0] uo_out,
     input  wire [7:0] uio_in,

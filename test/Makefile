@@ -2,7 +2,7 @@
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = spi_master.v aesa_brain.v tt_um_aesa_brain.v
+PROJECT_SOURCES = spi_master.v aesa_brain.v tt_um_kennanlau_aesa_brain_v2.v
 
 ifneq ($(GATES),yes)
 SIM_BUILD = sim_build/rtl

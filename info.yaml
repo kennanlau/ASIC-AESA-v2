@@ -3,7 +3,7 @@
 project:
   title: "AESA Digital Brain"
   author: "Kennan Lau"
-  description: "ADAR1000-format SPI frame engine: single frames, readback, 16-frame bursts and load pulses for 4 beamformer chips."
+  description: "ADAR1000-format SPI frame engine (v2.1): single frames, readback, 16-frame bursts and datasheet-safe load sequencing for 4 beamformer chips."
   language: "Verilog"
   clock_hz: 50000000
   tiles: "1x2"

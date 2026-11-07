@@ -8,6 +8,11 @@
 //   5 cfg: [1:0] stride-1, [3:2] auto load after burst (bit2 RX, bit3 TX),
 //          [4] cpha, [6:5] SCLK (0: clk/10, 1: clk/4, 2: clk/50, 3: clk/100)
 //   6 load pulse now: din[0] RX_LOAD, din[1] TX_LOAD
+// Load sequencing (v2.1, ADAR1000 datasheet): every load pulse is preceded by a
+// dummy broadcast write to the scratchpad (24'h080AAA = 24 SCLK cycles), and RX_LOAD
+// and TX_LOAD are never asserted together: RX request -> dummy, RX_LOAD;
+// TX request -> dummy, TX_LOAD; both -> dummy, RX_LOAD, dummy, TX_LOAD.
+// This gives >= 6 SCLK cycles before each pulse and >= 8 SCLK cycles between pulses.
 // start_single: one frame {header, data byte} (read when header bit15=1).
 // start_burst : 16 write frames, k = 0..15: chip = k[3:2],
 //               address = header[12:0] + k[1:0]*stride, data = bank[k].
@@ -49,19 +54,23 @@ module aesa_brain (
         endcase
     end
 
-    localparam C_IDLE = 2'd0, C_SEND = 2'd1, C_WAIT = 2'd2, C_LOAD = 2'd3;
-    reg  [1:0] cst;
+    localparam C_IDLE  = 3'd0, C_SEND = 3'd1, C_WAIT = 3'd2,
+               C_LNEXT = 3'd3, C_LWAIT = 3'd4, C_LPULSE = 3'd5;
+    localparam [23:0] DUMMY_FRAME = 24'h080AAA;   // write-all, scratchpad 0x00A, data 0xAA
+    reg  [2:0] cst;
     reg        burst;
     reg  [3:0] k;
     reg        spi_start;
-    reg  [1:0] lsel;
+    reg  [1:0] lreq;     // pending load requests: bit0 RX, bit1 TX
+    reg        lcur;     // pulse being generated: 0 RX, 1 TX
+    reg        dummy;    // current SPI frame is the dummy scratchpad write
     reg  [3:0] ltmr;
     wire       spi_busy, spi_done;
 
     wire [4:0]  off         = k[1:0] * stride;
     wire [12:0] addr        = hdr[12:0] + {8'd0, off};
     wire [23:0] burst_frame = {1'b0, k[3:2], addr, bank[k]};
-    wire [23:0] spi_tx      = burst ? burst_frame : {hdr, data_byte};
+    wire [23:0] spi_tx      = dummy ? DUMMY_FRAME : (burst ? burst_frame : {hdr, data_byte});
     wire        _unused     = &{spi_busy, cfg[7], 1'b0};   // cfg[7] reserved
 
     spi_master spi (
@@ -75,12 +84,12 @@ module aesa_brain (
             data_byte <= 8'd0; hdr <= 16'd0; ptr <= 4'd0; cfg <= 8'd0;
             cst <= C_IDLE; burst <= 1'b0; k <= 4'd0; spi_start <= 1'b0;
             busy <= 1'b0; done_sticky <= 1'b0; rx_load <= 1'b0; tx_load <= 1'b0;
-            lsel <= 2'd0; ltmr <= 4'd0;
+            lreq <= 2'd0; lcur <= 1'b0; dummy <= 1'b0; ltmr <= 4'd0;
             for (i = 0; i < 16; i = i + 1) bank[i] <= 8'd0;
         end else begin
             spi_start <= 1'b0;
             case (cst)
-                C_IDLE: begin
+                C_IDLE: begin                       // commands are accepted only here
                     if (wr) begin
                         case (sel)
                             3'd0: data_byte <= din;
@@ -90,8 +99,8 @@ module aesa_brain (
                             3'd4: ptr <= din[3:0];
                             3'd5: cfg <= din;
                             3'd6: if (din[1:0] != 2'd0) begin
-                                      lsel <= din[1:0]; ltmr <= 4'd0; busy <= 1'b1;
-                                      done_sticky <= 1'b0; cst <= C_LOAD;
+                                      lreq <= din[1:0]; busy <= 1'b1;
+                                      done_sticky <= 1'b0; cst <= C_LNEXT;
                                   end
                             default: ;
                         endcase
@@ -103,15 +112,25 @@ module aesa_brain (
                 C_SEND: begin spi_start <= 1'b1; cst <= C_WAIT; end
                 C_WAIT: if (spi_done) begin
                     if (burst && k != 4'd15) begin k <= k + 4'd1; cst <= C_SEND; end
-                    else if (burst && auto_load != 2'd0) begin
-                        lsel <= auto_load; ltmr <= 4'd0; cst <= C_LOAD;
-                    end else begin busy <= 1'b0; done_sticky <= 1'b1; cst <= C_IDLE; end
+                    else if (burst && auto_load != 2'd0) begin lreq <= auto_load; cst <= C_LNEXT; end
+                    else begin busy <= 1'b0; done_sticky <= 1'b1; cst <= C_IDLE; end
                 end
-                C_LOAD: begin                       // ~15-cycle load pulse (300 ns at 50 MHz)
-                    rx_load <= lsel[0]; tx_load <= lsel[1]; ltmr <= ltmr + 4'd1;
+                C_LNEXT: begin                      // next pending pulse: RX first, then TX
+                    if (lreq != 2'd0) begin
+                        lcur <= ~lreq[0]; dummy <= 1'b1; spi_start <= 1'b1; cst <= C_LWAIT;
+                    end else begin
+                        busy <= 1'b0; done_sticky <= 1'b1; cst <= C_IDLE;
+                    end
+                end
+                C_LWAIT: if (spi_done) begin        // dummy frame fully finished (CSB high)
+                    dummy <= 1'b0; ltmr <= 4'd0; cst <= C_LPULSE;
+                end
+                C_LPULSE: begin                     // ~15-cycle pulse (300 ns at 50 MHz)
+                    rx_load <= ~lcur; tx_load <= lcur; ltmr <= ltmr + 4'd1;
                     if (ltmr == 4'd15) begin
-                        rx_load <= 1'b0; tx_load <= 1'b0; busy <= 1'b0;
-                        done_sticky <= 1'b1; cst <= C_IDLE;
+                        rx_load <= 1'b0; tx_load <= 1'b0;
+                        if (lcur) lreq[1] <= 1'b0; else lreq[0] <= 1'b0;
+                        cst <= C_LNEXT;
                     end
                 end
                 default: cst <= C_IDLE;

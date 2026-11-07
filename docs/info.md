@@ -16,6 +16,15 @@ Two kinds of transfer:
   phase I or Q value) for all 16 channels of four chips. An RX_LOAD and/or TX_LOAD pulse can follow
   automatically, so all chips apply the new values at the same moment.
 
+### Load sequencing (v2.1)
+
+The ADAR1000 datasheet requires at least 6 SCLK cycles before a beam-memory load, at least 8 SCLK cycles
+between load pulses, and RX_LOAD and TX_LOAD never tied together. Every load request therefore runs as a
+sequence: a dummy write-all to the scratchpad register (frame 0x080AAA, 24 SCLK cycles), then the pulse.
+A combined request becomes dummy, RX_LOAD, dummy, TX_LOAD, so the two pins are never high together and are
+separated by 24 SCLK cycles. Both the manual load command and the automatic load after a burst use this
+sequence. `busy` stays high and new commands are ignored until the last pulse has ended; then `done` is set.
+
 Inputs pass through two-flop synchronizers and the control pins act on their rising edge only, so holding a
 pin high does not repeat the action. `done` stays high until the next operation starts.
 
@@ -41,10 +50,19 @@ pin high does not repeat the action. `done` stays high until the next operation 
 
 The cocotb tests include a behavioral ADAR1000 model that checks every frame, the register contents of
 four chips, write-all mode, readback, the load pulses, and that SDIO never changes on a sampling edge.
-The burst frames are locked to a SHA-256 golden hash in test/golden/.
+It also checks the v2.1 load sequencing: RX-only, TX-only and combined requests, at least 6 SCLK cycles
+before each pulse and at least 8 between pulses, no overlap, no load pulse during an SPI frame, the
+busy/done handshake, and that commands are ignored while a sequence runs.
+The burst frames (unchanged from v2.0) and the load sequence are locked to SHA-256 golden hashes in
+test/golden/. A missing golden file fails the test; it is only written with GOLDEN_UPDATE=1.
 
 ## External hardware
 
 ADAR1000 (or the ADAR1000-EVALZ board). The ADAR1000 uses 1.8 V logic, so level shifting is needed.
 Readback needs the chip's SDO enabled. Check against the datasheet before connecting: minimum CSB
 high time, load pulse width, and the I/Q register addresses for phase.
+
+Multi-chip readback: the ADAR1000 has a silicon erratum where chips that are not being read do not
+tristate SDO. The host must enable SDO only on the chip being read and disable it afterwards (ADI's
+procedure, with a special case for chip 0), and the board should have a series resistor between each
+chip's SDO and the shared line. The cocotb model assumes an ideal bus and does not model this contention.
